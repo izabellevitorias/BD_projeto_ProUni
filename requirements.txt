@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+streamlit
+pymongo
+pandas
+python-dotenv
+dnspython
