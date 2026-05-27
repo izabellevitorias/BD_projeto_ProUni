@@ -77,6 +77,36 @@ st.markdown(
 
 PALETTE = ["#2f6f73", "#d96459", "#f2b84b", "#4e79a7", "#8f5fbf", "#59a14f", "#e15759"]
 
+UF_COORDS = {
+    "AC": (-8.77, -70.55),
+    "AL": (-9.71, -35.73),
+    "AM": (-3.47, -65.10),
+    "AP": (1.41, -51.77),
+    "BA": (-12.96, -38.51),
+    "CE": (-5.20, -39.53),
+    "DF": (-15.83, -47.86),
+    "ES": (-19.19, -40.34),
+    "GO": (-16.64, -49.31),
+    "MA": (-5.42, -45.44),
+    "MG": (-18.10, -44.38),
+    "MS": (-20.51, -54.54),
+    "MT": (-12.64, -55.42),
+    "PA": (-5.53, -52.29),
+    "PB": (-7.06, -35.55),
+    "PE": (-8.28, -35.07),
+    "PI": (-8.28, -43.68),
+    "PR": (-24.89, -51.55),
+    "RJ": (-22.84, -43.15),
+    "RN": (-5.81, -36.59),
+    "RO": (-11.22, -62.80),
+    "RR": (1.89, -61.22),
+    "RS": (-30.01, -51.22),
+    "SC": (-27.33, -49.44),
+    "SE": (-10.90, -37.07),
+    "SP": (-22.19, -48.79),
+    "TO": (-10.25, -48.25),
+}
+
 
 @st.cache_data(show_spinner="Carregando dados...")
 def load_data():
@@ -92,11 +122,20 @@ def load_data():
         "RACA_BENEFICIARIO",
         "MUNICIPIO_BENEFICIARIO",
         "NOME_IES_BOLSA",
+        "MUNICIPIO",
     ]
 
     for column in text_columns:
         if column in data.columns:
             data[column] = data[column].fillna("Nao informado").astype(str).str.strip()
+
+    data["DATA_NASCIMENTO_DT"] = pd.to_datetime(
+        data["DATA_NASCIMENTO"],
+        dayfirst=True,
+        errors="coerce",
+    )
+    data["IDADE"] = 2020 - data["DATA_NASCIMENTO_DT"].dt.year
+    data.loc[(data["IDADE"] < 14) | (data["IDADE"] > 90), "IDADE"] = pd.NA
 
     return data
 
@@ -113,6 +152,14 @@ def count_by(data, column, label, limit=None):
         grouped = grouped.head(limit)
 
     return grouped
+
+
+def fmt_number(value):
+    return f"{value:,.0f}".replace(",", ".")
+
+
+def grouped_count(data, columns):
+    return data.groupby(columns).size().reset_index(name="Bolsas")
 
 
 def polish_chart(chart):
@@ -197,6 +244,128 @@ def donut_chart(data, category_field, value_field):
     return polish_chart(chart)
 
 
+def stacked_bar(data, x_field, color_field, height=320):
+    chart = (
+        alt.Chart(data)
+        .mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
+        .encode(
+            x=alt.X(f"{x_field}:N", title=None, axis=alt.Axis(labelAngle=0)),
+            y=alt.Y("Bolsas:Q", title=None, stack="zero"),
+            color=alt.Color(f"{color_field}:N", scale=alt.Scale(range=PALETTE), title=None),
+            tooltip=[
+                alt.Tooltip(f"{x_field}:N", title=x_field),
+                alt.Tooltip(f"{color_field}:N", title=color_field),
+                alt.Tooltip("Bolsas:Q", title="Bolsas", format=","),
+            ],
+        )
+        .properties(height=height)
+    )
+
+    return polish_chart(chart)
+
+
+def horizontal_stacked_bar(data, y_field, color_field, height=340):
+    chart = (
+        alt.Chart(data)
+        .mark_bar(cornerRadiusEnd=3)
+        .encode(
+            x=alt.X("Bolsas:Q", title=None, stack="zero"),
+            y=alt.Y(f"{y_field}:N", title=None, sort="-x"),
+            color=alt.Color(f"{color_field}:N", scale=alt.Scale(range=PALETTE), title=None),
+            tooltip=[
+                alt.Tooltip(f"{y_field}:N", title=y_field),
+                alt.Tooltip(f"{color_field}:N", title=color_field),
+                alt.Tooltip("Bolsas:Q", title="Bolsas", format=","),
+            ],
+        )
+        .properties(height=height)
+    )
+
+    return polish_chart(chart)
+
+
+def heatmap(data, x_field, y_field, height=330):
+    chart = (
+        alt.Chart(data)
+        .mark_rect(cornerRadius=3)
+        .encode(
+            x=alt.X(f"{x_field}:N", title=None, axis=alt.Axis(labelAngle=0)),
+            y=alt.Y(f"{y_field}:N", title=None, sort="-x"),
+            color=alt.Color(
+                "Bolsas:Q",
+                scale=alt.Scale(scheme="tealblues"),
+                title="Bolsas",
+            ),
+            tooltip=[
+                alt.Tooltip(f"{x_field}:N", title=x_field),
+                alt.Tooltip(f"{y_field}:N", title=y_field),
+                alt.Tooltip("Bolsas:Q", title="Bolsas", format=","),
+            ],
+        )
+        .properties(height=height)
+    )
+
+    return polish_chart(chart)
+
+
+def age_histogram(data, height=320):
+    ages = data[["IDADE"]].dropna()
+    chart = (
+        alt.Chart(ages)
+        .mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3, color=PALETTE[0])
+        .encode(
+            x=alt.X("IDADE:Q", bin=alt.Bin(step=5), title="Idade"),
+            y=alt.Y("count():Q", title=None),
+            tooltip=[
+                alt.Tooltip("IDADE:Q", bin=True, title="Faixa etaria"),
+                alt.Tooltip("count():Q", title="Bolsas", format=","),
+            ],
+        )
+        .properties(height=height)
+    )
+
+    return polish_chart(chart)
+
+
+def uf_bubble_map(data, height=410):
+    uf_data = count_by(data, "UF_BENEFICIARIO", "UF")
+    coords = pd.DataFrame(
+        [
+            {"UF": uf, "Latitude": lat, "Longitude": lon}
+            for uf, (lat, lon) in UF_COORDS.items()
+        ]
+    )
+    map_data = uf_data.merge(coords, on="UF", how="inner")
+
+    base = (
+        alt.Chart(map_data)
+        .mark_circle(opacity=0.78, stroke="#ffffff", strokeWidth=1.5)
+        .encode(
+            x=alt.X("Longitude:Q", title=None, scale=alt.Scale(domain=[-75, -32])),
+            y=alt.Y("Latitude:Q", title=None, scale=alt.Scale(domain=[-34, 6])),
+            size=alt.Size("Bolsas:Q", scale=alt.Scale(range=[90, 2600]), legend=None),
+            color=alt.Color("Bolsas:Q", scale=alt.Scale(scheme="tealblues"), legend=None),
+            tooltip=[
+                alt.Tooltip("UF:N", title="UF"),
+                alt.Tooltip("Bolsas:Q", title="Bolsas", format=","),
+            ],
+        )
+        .properties(height=height)
+    )
+
+    labels = (
+        alt.Chart(map_data)
+        .mark_text(fontSize=11, fontWeight="bold", color="#172033")
+        .encode(
+            x="Longitude:Q",
+            y="Latitude:Q",
+            text="UF:N",
+        )
+    )
+
+    return polish_chart(base + labels)
+
+
 df = load_data()
 
 if df.empty:
@@ -238,10 +407,10 @@ total_ies = filtered["NOME_IES_BOLSA"].nunique()
 total_municipios = filtered["MUNICIPIO_BENEFICIARIO"].nunique()
 
 kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-kpi1.metric("Bolsas", f"{total_bolsas:,}".replace(",", "."))
-kpi2.metric("Cursos", f"{total_cursos:,}".replace(",", "."))
-kpi3.metric("Instituicoes", f"{total_ies:,}".replace(",", "."))
-kpi4.metric("Municipios", f"{total_municipios:,}".replace(",", "."))
+kpi1.metric("Bolsas", fmt_number(total_bolsas))
+kpi2.metric("Cursos", fmt_number(total_cursos))
+kpi3.metric("Instituicoes", fmt_number(total_ies))
+kpi4.metric("Municipios", fmt_number(total_municipios))
 
 st.divider()
 
@@ -268,6 +437,25 @@ with right:
 left, right = st.columns((1, 1))
 
 with left:
+    st.markdown('<div class="section-title">Mapa de concentracao por UF</div>', unsafe_allow_html=True)
+    st.markdown('<div class="caption">Bolhas maiores indicam maior volume de bolsas por estado.</div>', unsafe_allow_html=True)
+    st.altair_chart(
+        uf_bubble_map(filtered, height=390),
+        use_container_width=True,
+    )
+
+with right:
+    st.markdown('<div class="section-title">Tipo de bolsa por regiao</div>', unsafe_allow_html=True)
+    st.markdown('<div class="caption">Comparacao regional entre bolsas integrais e parciais.</div>', unsafe_allow_html=True)
+    regiao_tipo = grouped_count(filtered, ["REGIAO_BENEFICIARIO", "TIPO_BOLSA"])
+    st.altair_chart(
+        stacked_bar(regiao_tipo, "REGIAO_BENEFICIARIO", "TIPO_BOLSA", height=390),
+        use_container_width=True,
+    )
+
+left, right = st.columns((1, 1))
+
+with left:
     st.markdown('<div class="section-title">Distribuicao por sexo</div>', unsafe_allow_html=True)
     sexo_data = count_by(filtered, "SEXO_BENEFICIARIO", "Sexo")
     st.altair_chart(
@@ -280,6 +468,29 @@ with right:
     modalidade_data = count_by(filtered, "MODALIDADE_ENSINO_BOLSA", "Modalidade")
     st.altair_chart(
         horizontal_bar(modalidade_data, "Bolsas", "Modalidade", "Modalidade", height=220),
+        use_container_width=True,
+    )
+
+left, right = st.columns((1, 1))
+
+with left:
+    st.markdown('<div class="section-title">Faixa etaria dos beneficiarios</div>', unsafe_allow_html=True)
+    st.markdown('<div class="caption">Idade aproximada em 2020, calculada pela data de nascimento.</div>', unsafe_allow_html=True)
+    st.altair_chart(
+        age_histogram(filtered, height=320),
+        use_container_width=True,
+    )
+
+with right:
+    st.markdown('<div class="section-title">Modalidade por estado</div>', unsafe_allow_html=True)
+    st.markdown('<div class="caption">Comparacao entre EAD e presencial nos estados com mais bolsas.</div>', unsafe_allow_html=True)
+    top_ufs = count_by(filtered, "UF_BENEFICIARIO", "UF", limit=12)["UF"]
+    uf_modalidade = grouped_count(
+        filtered[filtered["UF_BENEFICIARIO"].isin(top_ufs)],
+        ["UF_BENEFICIARIO", "MODALIDADE_ENSINO_BOLSA"],
+    )
+    st.altair_chart(
+        horizontal_stacked_bar(uf_modalidade, "UF_BENEFICIARIO", "MODALIDADE_ENSINO_BOLSA", height=320),
         use_container_width=True,
     )
 
@@ -300,6 +511,90 @@ with right:
         horizontal_bar(raca_data, "Bolsas", "Raca/cor", "Raca/cor", height=420),
         use_container_width=True,
     )
+
+left, right = st.columns((1.2, 1))
+
+with left:
+    st.markdown('<div class="section-title">Instituicoes com mais bolsas</div>', unsafe_allow_html=True)
+    st.markdown('<div class="caption">Ranking das instituicoes de ensino com maior volume no recorte atual.</div>', unsafe_allow_html=True)
+    top_ies = count_by(filtered, "NOME_IES_BOLSA", "Instituicao", limit=12)
+    st.altair_chart(
+        horizontal_bar(top_ies, "Bolsas", "Instituicao", height=420),
+        use_container_width=True,
+    )
+
+with right:
+    st.markdown('<div class="section-title">Turno do curso</div>', unsafe_allow_html=True)
+    turno_data = count_by(filtered, "NOME_TURNO_CURSO_BOLSA", "Turno")
+    st.altair_chart(
+        horizontal_bar(turno_data, "Bolsas", "Turno", "Turno", height=420),
+        use_container_width=True,
+    )
+
+st.divider()
+st.header("Analise focada em Campinas")
+
+campinas_beneficiarios = filtered[
+    filtered["MUNICIPIO_BENEFICIARIO"].str.upper() == "CAMPINAS"
+].copy()
+campinas_campus = filtered[
+    filtered["MUNICIPIO"].str.upper() == "CAMPINAS"
+].copy()
+
+camp1, camp2, camp3, camp4 = st.columns(4)
+camp1.metric("Beneficiarios moradores", fmt_number(len(campinas_beneficiarios)))
+camp2.metric("Cursos dos moradores", fmt_number(campinas_beneficiarios["NOME_CURSO_BOLSA"].nunique()))
+camp3.metric("Bolsas em campus Campinas", fmt_number(len(campinas_campus)))
+camp4.metric("Instituicoes em Campinas", fmt_number(campinas_campus["NOME_IES_BOLSA"].nunique()))
+
+if campinas_beneficiarios.empty and campinas_campus.empty:
+    st.info("Nao ha registros de Campinas no recorte selecionado.")
+else:
+    left, right = st.columns((1, 1))
+
+    with left:
+        st.markdown('<div class="section-title">Campinas: cursos dos beneficiarios</div>', unsafe_allow_html=True)
+        if campinas_beneficiarios.empty:
+            st.info("Sem beneficiarios moradores de Campinas nos filtros atuais.")
+        else:
+            camp_cursos = count_by(campinas_beneficiarios, "NOME_CURSO_BOLSA", "Curso", limit=10)
+            st.altair_chart(
+                horizontal_bar(camp_cursos, "Bolsas", "Curso", height=340),
+                use_container_width=True,
+            )
+
+    with right:
+        st.markdown('<div class="section-title">Campinas: perfil por modalidade</div>', unsafe_allow_html=True)
+        if campinas_beneficiarios.empty:
+            st.info("Sem beneficiarios moradores de Campinas nos filtros atuais.")
+        else:
+            camp_modalidade = count_by(campinas_beneficiarios, "MODALIDADE_ENSINO_BOLSA", "Modalidade")
+            st.altair_chart(
+                donut_chart(camp_modalidade, "Modalidade", "Bolsas"),
+                use_container_width=True,
+            )
+
+    left, right = st.columns((1.1, 1))
+
+    with left:
+        st.markdown('<div class="section-title">Campinas: instituicoes/campus</div>', unsafe_allow_html=True)
+        if campinas_campus.empty:
+            st.info("Sem campus localizados em Campinas nos filtros atuais.")
+        else:
+            camp_ies = count_by(campinas_campus, "NOME_IES_BOLSA", "Instituicao", limit=10)
+            st.altair_chart(
+                horizontal_bar(camp_ies, "Bolsas", "Instituicao", height=340),
+                use_container_width=True,
+            )
+
+    with right:
+        st.markdown('<div class="section-title">Campinas: tipo de bolsa</div>', unsafe_allow_html=True)
+        camp_base = campinas_beneficiarios if not campinas_beneficiarios.empty else campinas_campus
+        camp_tipo = count_by(camp_base, "TIPO_BOLSA", "Tipo")
+        st.altair_chart(
+            horizontal_bar(camp_tipo, "Bolsas", "Tipo", "Tipo", height=260),
+            use_container_width=True,
+        )
 
 st.markdown('<div class="section-title">Tabela de dados filtrados</div>', unsafe_allow_html=True)
 preview_columns = [
