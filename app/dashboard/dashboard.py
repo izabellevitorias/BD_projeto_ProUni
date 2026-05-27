@@ -1,6 +1,6 @@
 import streamlit as st
 
-from app.services.prouni_service import (
+from services.prouni_service import (
     get_all_data,
     get_estado_data
 )

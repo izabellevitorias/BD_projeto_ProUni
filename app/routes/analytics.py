@@ -1,8 +1,6 @@
 from fastapi import APIRouter
 
-from app.services.prouni_service import (
-    get_all_data
-)
+from services.prouni_service import get_all_data
 
 router = APIRouter()
 

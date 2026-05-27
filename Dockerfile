@@ -8,6 +8,8 @@ RUN pip install -r requirements.txt
 
 COPY . .
 
+ENV PYTHONPATH=/app/app
+
 EXPOSE 8000
 EXPOSE 8501
 

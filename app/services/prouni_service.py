@@ -1,5 +1,6 @@
 import pandas as pd
-from app.database import collection
+
+from database import collection
 
 
 def get_all_data():
