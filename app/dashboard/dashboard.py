@@ -14,6 +14,10 @@ st.title("Prouni Analytics 2020")
 
 df = get_all_data()
 
+if df.empty:
+    st.warning("Nenhum dado encontrado para montar os dashboards.")
+    st.stop()
+
 estado = st.selectbox(
     "Estado",
     sorted(

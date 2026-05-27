@@ -16,7 +16,7 @@ if not MONGO_URI.startswith(("mongodb://", "mongodb+srv://")):
         "Ela deve comecar com 'mongodb://' ou 'mongodb+srv://'."
     )
 
-client = MongoClient(MONGO_URI)
+client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
 
 if not MONGO_DB:
     raise ValueError("MONGODB_DB nao configurada.")

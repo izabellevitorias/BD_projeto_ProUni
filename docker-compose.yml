@@ -1,8 +1,40 @@
 services:
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+
+  prouni-import:
+    build: .
+    env_file:
+      - .env
+    environment:
+      MONGODB_URI: mongodb://mongo:27017
+      MONGODB_DB: proUni
+      MONGODB_COLLECTION: dados2020
+    command: python scripts/import_csv_to_mongo.py
+    depends_on:
+      mongo:
+        condition: service_started
+
   prouni-app:
     build: .
     env_file:
       - .env
+    environment:
+      MONGODB_URI: mongodb://mongo:27017
+      MONGODB_DB: proUni
+      MONGODB_COLLECTION: dados2020
+    depends_on:
+      mongo:
+        condition: service_started
+      prouni-import:
+        condition: service_completed_successfully
     ports:
       - "8000:8000"
-      - "8501:8501"
+      - "8502:8501"
+
+volumes:
+  mongo-data:
