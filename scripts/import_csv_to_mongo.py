@@ -1,11 +1,13 @@
 from pathlib import Path
 import time
 
+
 import pandas as pd
 from pymongo import MongoClient
 from pymongo.errors import ServerSelectionTimeoutError
 
 from database import MONGO_COLLECTION, MONGO_DB, MONGO_URI
+from services.prouni_service import make_university_acronym
 
 
 CSV_PATH = Path(__file__).resolve().parent.parent / "app" / "data" / "ProuniRelatorioDadosAbertos2020.csv"
@@ -36,7 +38,10 @@ def main():
     print("Importando CSV para o MongoDB...")
 
     total = 0
+
     for chunk in pd.read_csv(CSV_PATH, sep=";", encoding="latin1", chunksize=BATCH_SIZE):
+        if "NOME_IES_BOLSA" in chunk.columns:
+            chunk["SIGLA_IES_BOLSA"] = chunk["NOME_IES_BOLSA"].map(make_university_acronym)
         records = chunk.where(pd.notnull(chunk), None).to_dict("records")
         if records:
             collection.insert_many(records)
