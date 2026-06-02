@@ -1,6 +1,14 @@
+import re
+import sys
+from pathlib import Path
+
 import altair as alt
 import pandas as pd
 import streamlit as st
+
+APP_ROOT = Path(__file__).resolve().parents[1]
+if str(APP_ROOT) not in sys.path:
+    sys.path.insert(0, str(APP_ROOT))
 
 from services.prouni_service import get_all_data
 
@@ -77,6 +85,33 @@ st.markdown(
 
 PALETTE = ["#2f6f73", "#d96459", "#f2b84b", "#4e79a7", "#8f5fbf", "#59a14f", "#e15759"]
 
+SIGLAS_CONHECIDAS = {
+    "UNIVERSIDADE PAULISTA": "UNIP",
+    "UNIVERSIDADE ESTACIO DE SA": "ESTACIO",
+    "CENTRO UNIVERSITARIO LEONARDO DA VINCI": "UNIASSELVI",
+    "CENTRO UNIVERSITARIO DE MARINGA": "UNICESUMAR",
+    "PONTIFICIA UNIVERSIDADE CATOLICA DE MINAS GERAIS": "PUC MINAS",
+    "UNIVERSIDADE PITAGORAS UNOPAR": "UNOPAR",
+    "UNIVERSIDADE CIDADE DE SAO PAULO": "UNICID",
+    "UNIVERSIDADE CRUZEIRO DO SUL": "UNICSUL",
+    "CENTRO UNIVERSITARIO DAS FACULDADES METROPOLITANAS UNIDAS": "FMU",
+    "UNIVERSIDADE SAO JUDAS TADEU": "USJT",
+    "CENTRO UNIVERSITARIO ANHANGUERA": "ANHANGUERA",
+}
+
+SIGLA_STOP_WORDS = {
+    "A",
+    "AS",
+    "DA",
+    "DAS",
+    "DE",
+    "DO",
+    "DOS",
+    "E",
+    "EM",
+    "PARA",
+}
+
 UF_COORDS = {
     "AC": (-8.77, -70.55),
     "AL": (-9.71, -35.73),
@@ -136,8 +171,47 @@ def load_data():
     )
     data["IDADE"] = 2020 - data["DATA_NASCIMENTO_DT"].dt.year
     data.loc[(data["IDADE"] < 14) | (data["IDADE"] > 90), "IDADE"] = pd.NA
+    data["SIGLA_IES_BOLSA"] = data["NOME_IES_BOLSA"].apply(make_university_acronym)
 
     return data
+
+
+def normalize_text(value):
+    text = str(value).strip().upper()
+    replacements = str.maketrans(
+        "ÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇ",
+        "AAAAAEEEEIIIIOOOOOUUUUC",
+    )
+    return text.translate(replacements)
+
+
+def make_university_acronym(name):
+    normalized = normalize_text(name)
+
+    words = normalized.replace("-", " ").split()
+    if len(words) == 1 and 2 <= len(normalized) <= 14:
+        return normalized
+
+    for full_name, acronym in SIGLAS_CONHECIDAS.items():
+        if full_name in normalized:
+            return acronym
+
+    if "-" in normalized:
+        suffix = normalized.split("-")[-1].strip()
+        suffix_words = re.findall(r"[A-Z0-9]+", suffix)
+        if suffix_words and len(suffix_words[0]) >= 3:
+            return suffix_words[0][:14]
+
+    words = [
+        word
+        for word in re.findall(r"[A-Z0-9]+", normalized)
+        if word not in SIGLA_STOP_WORDS
+    ]
+
+    if not words:
+        return "NI"
+
+    return "".join(word[0] for word in words[:6])[:10]
 
 
 def count_by(data, column, label, limit=None):
@@ -308,16 +382,163 @@ def heatmap(data, x_field, y_field, height=330):
     return polish_chart(chart)
 
 
-def age_histogram(data, height=320):
-    ages = data[["IDADE"]].dropna()
+def shorten_label(value, max_chars=20):
+    text = str(value)
+    if len(text) <= max_chars:
+        return text
+
+    return text[: max_chars - 3].rstrip() + "..."
+
+
+def university_course_graph(data, institution, height=360):
+    graph_base = data[data["SIGLA_IES_BOLSA"] == institution]
+    edges = grouped_count(graph_base, ["SIGLA_IES_BOLSA", "NOME_CURSO_BOLSA"])
+    edges = edges.sort_values("Bolsas", ascending=False).head(8).reset_index(drop=True)
+
+    if edges.empty:
+        return None
+
+    total_institution = edges["Bolsas"].sum()
+    institution_nodes = pd.DataFrame(
+        [
+            {
+                "Id": institution,
+                "Label": institution,
+                "Tipo": "Instituicao",
+                "Bolsas": total_institution,
+                "x": 0.18,
+                "y": 0.50,
+            }
+        ]
+    )
+    course_nodes = pd.DataFrame(
+        [
+            {
+                "Id": row["NOME_CURSO_BOLSA"],
+                "Label": shorten_label(row["NOME_CURSO_BOLSA"], 24),
+                "Tipo": "Curso",
+                "Bolsas": row["Bolsas"],
+                "x": 0.74,
+                "y": (index + 1) / (len(edges) + 1),
+            }
+            for index, row in edges.iterrows()
+        ]
+    )
+    nodes = pd.concat([institution_nodes, course_nodes], ignore_index=True)
+
+    edge_lines = pd.concat(
+        [
+            pd.DataFrame(
+                {
+                    "Ligacao": edges.index,
+                    "x": 0.18,
+                    "y": 0.50,
+                    "SIGLA_IES_BOLSA": edges["SIGLA_IES_BOLSA"],
+                    "NOME_CURSO_BOLSA": edges["NOME_CURSO_BOLSA"],
+                    "Bolsas": edges["Bolsas"],
+                }
+            ),
+            pd.DataFrame(
+                {
+                    "Ligacao": edges.index,
+                    "x": 0.74,
+                    "y": course_nodes["y"],
+                    "SIGLA_IES_BOLSA": edges["SIGLA_IES_BOLSA"],
+                    "NOME_CURSO_BOLSA": edges["NOME_CURSO_BOLSA"],
+                    "Bolsas": edges["Bolsas"],
+                }
+            ),
+        ],
+        ignore_index=True,
+    )
+
+    edges_chart = (
+        alt.Chart(edge_lines)
+        .mark_line(color="#8fa3b8", opacity=0.58)
+        .encode(
+            x=alt.X("x:Q", axis=None, scale=alt.Scale(domain=[0, 1])),
+            y=alt.Y("y:Q", axis=None, scale=alt.Scale(domain=[0, 1])),
+            detail="Ligacao:N",
+            strokeWidth=alt.StrokeWidth("Bolsas:Q", scale=alt.Scale(range=[1, 7]), legend=None),
+            tooltip=[
+                alt.Tooltip("SIGLA_IES_BOLSA:N", title="Instituicao"),
+                alt.Tooltip("NOME_CURSO_BOLSA:N", title="Curso"),
+                alt.Tooltip("Bolsas:Q", title="Bolsas", format=","),
+            ],
+        )
+    )
+    nodes_chart = (
+        alt.Chart(nodes)
+        .mark_circle(stroke="#ffffff", strokeWidth=2, opacity=0.97)
+        .encode(
+            x=alt.X("x:Q", axis=None, scale=alt.Scale(domain=[0, 1])),
+            y=alt.Y("y:Q", axis=None, scale=alt.Scale(domain=[0, 1])),
+            size=alt.Size("Bolsas:Q", scale=alt.Scale(range=[240, 1400]), legend=None),
+            color=alt.Color("Tipo:N", scale=alt.Scale(range=[PALETTE[0], PALETTE[1]]), title=None),
+            tooltip=[
+                alt.Tooltip("Id:N", title="No"),
+                alt.Tooltip("Tipo:N", title="Tipo"),
+                alt.Tooltip("Bolsas:Q", title="Bolsas", format=","),
+            ],
+        )
+    )
+    labels = (
+        alt.Chart(nodes)
+        .mark_text(fontSize=12, color="#172033", fontWeight="bold", dx=14, align="left")
+        .encode(
+            x=alt.X("x:Q", axis=None, scale=alt.Scale(domain=[0, 1])),
+            y=alt.Y("y:Q", axis=None, scale=alt.Scale(domain=[0, 1])),
+            text="Label:N",
+        )
+    )
+    edge_labels = (
+        alt.Chart(edge_lines[edge_lines["x"] == 0.74])
+        .mark_text(fontSize=11, color="#61708a", dx=14, dy=15, align="left")
+        .encode(
+            x=alt.X("x:Q", axis=None, scale=alt.Scale(domain=[0, 1])),
+            y=alt.Y("y:Q", axis=None, scale=alt.Scale(domain=[0, 1])),
+            text=alt.Text("Bolsas:Q", format=","),
+        )
+    )
+
+    return polish_chart((edges_chart + nodes_chart + labels + edge_labels).properties(height=height))
+
+
+def age_by_scholarship_type_chart(data, height=330):
+    ages = data[["IDADE", "TIPO_BOLSA"]].dropna().copy()
+
+    if ages.empty:
+        return None
+
+    bins = list(range(15, 96, 5))
+    labels = [f"{start}-{start + 5}" for start in bins[:-1]]
+    ages["Faixa idade"] = pd.cut(
+        ages["IDADE"],
+        bins=bins,
+        labels=labels,
+        right=False,
+    )
+    ages = ages.dropna(subset=["Faixa idade"])
+
+    if ages.empty:
+        return None
+
     chart = (
         alt.Chart(ages)
-        .mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3, color=PALETTE[0])
+        .mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
         .encode(
-            x=alt.X("IDADE:Q", bin=alt.Bin(step=5), title="Idade"),
-            y=alt.Y("count():Q", title=None),
+            x=alt.X(
+                "Faixa idade:N",
+                title="Faixa de idade",
+                sort=labels,
+                axis=alt.Axis(grid=False, labelAngle=-45, labelOverlap=False),
+            ),
+            y=alt.Y("count():Q", title="Bolsas", axis=alt.Axis(grid=True, tickCount=5)),
+            color=alt.Color("TIPO_BOLSA:N", scale=alt.Scale(range=PALETTE), title="Tipo de bolsa"),
+            xOffset=alt.XOffset("TIPO_BOLSA:N"),
             tooltip=[
-                alt.Tooltip("IDADE:Q", bin=True, title="Faixa etaria"),
+                alt.Tooltip("Faixa idade:N", title="Faixa de idade"),
+                alt.Tooltip("TIPO_BOLSA:N", title="Tipo de bolsa"),
                 alt.Tooltip("count():Q", title="Bolsas", format=","),
             ],
         )
@@ -403,7 +624,7 @@ if filtered.empty:
 
 total_bolsas = len(filtered)
 total_cursos = filtered["NOME_CURSO_BOLSA"].nunique()
-total_ies = filtered["NOME_IES_BOLSA"].nunique()
+total_ies = filtered["SIGLA_IES_BOLSA"].nunique()
 total_municipios = filtered["MUNICIPIO_BENEFICIARIO"].nunique()
 
 kpi1, kpi2, kpi3, kpi4 = st.columns(4)
@@ -474,25 +695,29 @@ with right:
 left, right = st.columns((1, 1))
 
 with left:
-    st.markdown('<div class="section-title">Faixa etaria dos beneficiarios</div>', unsafe_allow_html=True)
-    st.markdown('<div class="caption">Idade aproximada em 2020, calculada pela data de nascimento.</div>', unsafe_allow_html=True)
-    st.altair_chart(
-        age_histogram(filtered, height=320),
-        use_container_width=True,
-    )
+    st.markdown('<div class="section-title">Grafo por universidade</div>', unsafe_allow_html=True)
+    st.markdown('<div class="caption">Escolha uma sigla para ver somente os cursos ligados a essa universidade. O numero ao lado do curso indica a quantidade de bolsas.</div>', unsafe_allow_html=True)
+    top_graph_institutions = count_by(filtered, "SIGLA_IES_BOLSA", "Instituicao", limit=4)["Instituicao"].tolist()
+    if not top_graph_institutions:
+        st.info("Nao ha dados suficientes para montar o grafo no recorte selecionado.")
+    else:
+        graph_tabs = st.tabs(top_graph_institutions)
+        for tab, institution in zip(graph_tabs, top_graph_institutions):
+            with tab:
+                graph_chart = university_course_graph(filtered, institution, height=330)
+                if graph_chart is None:
+                    st.info("Nao ha cursos suficientes para montar o grafo desta universidade.")
+                else:
+                    st.altair_chart(graph_chart, use_container_width=True)
 
 with right:
-    st.markdown('<div class="section-title">Modalidade por estado</div>', unsafe_allow_html=True)
-    st.markdown('<div class="caption">Comparacao entre EAD e presencial nos estados com mais bolsas.</div>', unsafe_allow_html=True)
-    top_ufs = count_by(filtered, "UF_BENEFICIARIO", "UF", limit=12)["UF"]
-    uf_modalidade = grouped_count(
-        filtered[filtered["UF_BENEFICIARIO"].isin(top_ufs)],
-        ["UF_BENEFICIARIO", "MODALIDADE_ENSINO_BOLSA"],
-    )
-    st.altair_chart(
-        horizontal_stacked_bar(uf_modalidade, "UF_BENEFICIARIO", "MODALIDADE_ENSINO_BOLSA", height=320),
-        use_container_width=True,
-    )
+    st.markdown('<div class="section-title">Idades por tipo de bolsa</div>', unsafe_allow_html=True)
+    st.markdown('<div class="caption">Comparacao das faixas etarias entre bolsas integrais e parciais.</div>', unsafe_allow_html=True)
+    age_chart = age_by_scholarship_type_chart(filtered, height=330)
+    if age_chart is None:
+        st.info("Nao ha dados de idade suficientes para montar o grafico.")
+    else:
+        st.altair_chart(age_chart, use_container_width=True)
 
 left, right = st.columns((1.15, 1))
 
@@ -516,8 +741,8 @@ left, right = st.columns((1.2, 1))
 
 with left:
     st.markdown('<div class="section-title">Instituicoes com mais bolsas</div>', unsafe_allow_html=True)
-    st.markdown('<div class="caption">Ranking das instituicoes de ensino com maior volume no recorte atual.</div>', unsafe_allow_html=True)
-    top_ies = count_by(filtered, "NOME_IES_BOLSA", "Instituicao", limit=12)
+    st.markdown('<div class="caption">Ranking das siglas das instituicoes de ensino com maior volume no recorte atual.</div>', unsafe_allow_html=True)
+    top_ies = count_by(filtered, "SIGLA_IES_BOLSA", "Instituicao", limit=12)
     st.altair_chart(
         horizontal_bar(top_ies, "Bolsas", "Instituicao", height=420),
         use_container_width=True,
@@ -545,7 +770,7 @@ camp1, camp2, camp3, camp4 = st.columns(4)
 camp1.metric("Beneficiarios moradores", fmt_number(len(campinas_beneficiarios)))
 camp2.metric("Cursos dos moradores", fmt_number(campinas_beneficiarios["NOME_CURSO_BOLSA"].nunique()))
 camp3.metric("Bolsas em campus Campinas", fmt_number(len(campinas_campus)))
-camp4.metric("Instituicoes em Campinas", fmt_number(campinas_campus["NOME_IES_BOLSA"].nunique()))
+camp4.metric("Instituicoes em Campinas", fmt_number(campinas_campus["SIGLA_IES_BOLSA"].nunique()))
 
 if campinas_beneficiarios.empty and campinas_campus.empty:
     st.info("Nao ha registros de Campinas no recorte selecionado.")
@@ -581,7 +806,7 @@ else:
         if campinas_campus.empty:
             st.info("Sem campus localizados em Campinas nos filtros atuais.")
         else:
-            camp_ies = count_by(campinas_campus, "NOME_IES_BOLSA", "Instituicao", limit=10)
+            camp_ies = count_by(campinas_campus, "SIGLA_IES_BOLSA", "Instituicao", limit=10)
             st.altair_chart(
                 horizontal_bar(camp_ies, "Bolsas", "Instituicao", height=340),
                 use_container_width=True,
@@ -600,6 +825,7 @@ st.markdown('<div class="section-title">Tabela de dados filtrados</div>', unsafe
 preview_columns = [
     "UF_BENEFICIARIO",
     "MUNICIPIO_BENEFICIARIO",
+    "SIGLA_IES_BOLSA",
     "NOME_CURSO_BOLSA",
     "TIPO_BOLSA",
     "MODALIDADE_ENSINO_BOLSA",

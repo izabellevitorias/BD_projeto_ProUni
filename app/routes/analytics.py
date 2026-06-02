@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from services.prouni_service import get_all_data
+from services.prouni_service import get_all_data, grafo_universidades_por_estado
 
 router = APIRouter()
 
@@ -8,6 +8,11 @@ router = APIRouter()
 @router.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@router.get("/grafo-universidades")
+def grafo_universidades():
+    return grafo_universidades_por_estado()
 
 
 @router.get("/estados")
